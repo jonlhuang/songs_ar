@@ -1,5 +1,6 @@
 #### Data exploration of SONGS size structured data
 #### Jonathan Huang
+#### NOTE: Import raw data from "data import" R file
 
 ####-----load libraries-----
 library(tidyverse)
@@ -12,60 +13,13 @@ library(lmerTest)
 library(performance) #for model checking
 library(permuco) #permutation (randomization) test
 library(car)
+library(GGally) #more ggplot - correlation matrix
 
-####------------import data ----------####
+####------------wrangle raw data ----------####
 
 #add songs data
-{
-#upload phase 2/3 data from online repository
-{inUrl1  <- "https://pasta.lternet.edu/package/data/eml/edi/668/3/60afbd5190f50ba5271dacdf74e549f3" 
-infile1 <- tempfile()
-try(download.file(inUrl1,infile1,method="curl"))
-if (is.na(file.size(infile1))) download.file(inUrl1,infile1,method="auto")
-
-
-phase2_3 <-read.csv(infile1,header=F 
-               ,skip=1
-               ,sep=","  
-               , col.names=c(
-                 "year",     
-                 "date",     
-                 "reef_code",     
-                 "polygon",     
-                 "phase_built_code",     
-                 "transect_code",     
-                 "visibility",     
-                 "species_code",     
-                 "genus_name",     
-                 "species_name",     
-                 "count",     
-                 "total_length",     
-                 "total_area_sampled"    ), check.names=TRUE)
-unlink(infile1)
-
-phase2_3 <- phase2_3 %>% 
-filter(species_code %in% c("PACL", "OXCA", "PANE",
-                           "CHPU", "EMJA", "SEPU")) 
-}
-
-#add phase 1 data
-  condpath <- here("data","phase1_survey_clean") 
-  files <- dir(path = condpath,
-               pattern = ".csv",
-               full.names = TRUE)
-  songs_1 <- files %>% #iterating over files
-    set_names() %>% # set the id for everything in "files"
-    map_df(read_csv, .id = "filename")
-  
-  
-# songs_1 <- read.csv(here("data","songs_clean.csv")) %>% 
-#   filter(transtype_strata %in% c("BOTTOM", NA))   #Filter so only bottom transect in phase 1 matches phase 2 & 3 
-  
-}
-
-
-songs <- bind_rows(songs_1,phase2_3) %>% 
-  select(3:18)
+songs <- songs %>% 
+  filter(transtype_strata %in% c("BOTTOM",NA))
 
 #Data wrangle to have individual fish per row
 songs_count <- songs %>% 
@@ -106,11 +60,12 @@ glimpse(songs_yoy_fishdensity)
 
   
 
-#####------------------------ Add environmental data for correleation-------
+#####------------------------ environmental data for correleation-------
 #kelp density
-kelp <- read.csv(url("https://portal.edirepository.org/nis/dataviewer?packageid=edi.667.3&entityid=6f44e7f393c932e0f72ccbf3b361e0fc")) %>% 
+kelp <- kelp %>% 
   summarise(ann_kelp = sum(number_of_plants),
-            .by = c(year, reef_code,quadrat_area))
+            .by = c(year,reef_code,transect_code,quadrat_area)) %>% 
+  mutate(ann_kelp_den = ann_kelp/quadrat_area)
 glimpse(kelp)
 
 # kelp %>%
@@ -118,7 +73,7 @@ glimpse(kelp)
 #   geom_line()
 
 #MOCI
-moci <- read.csv(url("http://www.faralloninstitute.org/s/CaliforniaMOCI.csv")) %>% 
+moci <- moci %>% 
   select(c(time,Year,Season,Southern.California..32.34.5N.)) %>% 
   rename("socal_moci" = Southern.California..32.34.5N.) %>% 
   mutate(time = ymd(time)) %>% 
@@ -133,7 +88,6 @@ colnames(moci)
 glimpse(moci)
 
 #SST
-oceanside_sst <- read.csv(url("https://erddap.sensors.axds.co/erddap/tabledap/edu_ucsd_cdip_045.csv?time%2Csea_water_temperature%2Csea_water_temperature_qc_agg%2Cz&time%3E%3D1997-05-19T15%3A38%3A34Z&time%3C%3D2023-06-28T20%3A28%3A20Z"))
 oceanside_sst [oceanside_sst == "NaN"] <- NA         #replace NaN with NA
 names(oceanside_sst) <- oceanside_sst[1,]            #make the first row the header 
 oceanside_sst <- oceanside_sst[-1,]                  #add the first row to the header
@@ -156,12 +110,12 @@ oceanside_sstf<-cbind(oceanside_sstspread,oceanside_ssttime) %>%      #combine v
             .by = year)
 
 #BUTI - Nutrient transport
-beuti <- read.csv(url("https://www.mjacox.com/wp-content/uploads/2023/07/BEUTI_monthly.csv")) %>% 
+beuti <- beuti %>% 
   select(c(year, month, X33N)) %>% 
   summarise(ann_beuti = mean(X33N),
             .by = year)
 
-mei <- read.csv(here("data","Oceanographic","mei2023.csv")) %>% 
+mei <- mei %>% 
   rename("year" = X) %>% 
   pivot_longer(cols = c(DJ:ND),
                names_to = "month",
@@ -646,7 +600,7 @@ yoy_oxca_den <- songs_yoy_fishdensity %>%
 # Asing Questions
 #info on randomization (or permutation) test://www.uvm.edu/~statdhtx/StatPages/Randomization%20Tests/RandomRepeatedMeasuresAnovaR.html
 #Note: randomization test uses random assignment 
-# SO, if we are abile to shuffle randomaly abundance at each year, the sites should be the same 
+# SO, if we shuffle randomly abundance at each year, the sites should be the same 
 
 
 repmes_permu <- function(data) aovperm(fish_density ~ reef_code
@@ -683,41 +637,33 @@ pacl_sum <- yoy_pacl_den %>%
             .by = c(year, reef_code)) %>% 
   mutate(reef_code = as.factor(reef_code), levels(c("WNR","SMK","BK")))
 
-test <- cor.test(pacl_sum$ann_moci, pacl_sum$ann_density, method = "spearman", data = pacl_sum)
-test
-
+#make empty matrix for data to go into
 df <- data.frame(matrix(ncol = 6,
                         nrow = 4))
 colnames(df) <- c("wnr_rho", "wnr_p-value", "smk_rho","smk_p-value", "bk_rho","bk_p-value")
 
-
-# test for correlation test, no separating by sites yet
-# for (i in 4:ncol(pacl_sum)) {
-#   
-#   df$rho [i-3] <- cor.test(pacl_sum[,3],pacl_sum[,i], method = "spearman")$estimate
-#   df$`p-value` [i-3] <- cor.test(pacl_sum[,3],pacl_sum[,i], method = "spearman")$p.value
-# }
-
-df_wnr <- pacl_sum %>% filter(reef_code %in%  c("WNR")) 
-df_smk <- pacl_sum %>% filter(reef_code %in%  c("SMK")) 
-df_bk <- pacl_sum %>% filter(reef_code %in%  c("BK")) 
+df_wnr <-as.data.frame( pacl_sum %>% filter(reef_code %in%  c("WNR")))
+df_smk <- as.data.frame( pacl_sum %>% filter(reef_code %in%  c("SMK"))) 
+df_bk <-as.data.frame(  pacl_sum %>% filter(reef_code %in%  c("BK"))) 
 
 # for loop to test correltation for every site by environemtal factor
 
-  for (j in 4:ncol(pacl_sum)) {
+  for (j in 4:7) {
 
-    df$wnr_rho[j-3] <- cor.test(df_wnr$ann_density, df_wnr [,j], method = "spearman")$estimate
+    df$wnr_rho[j-3] <- cor.test(df_wnr$ann_density, df_wnr[,j] , method = "spearman")$estimate
     df$`wnr_p-value`[j-3] <-  cor.test(df_wnr$ann_density, df_wnr [,j], method = "spearman")$p.value
-    df$smk_rho <- cor.test(df_smk$ann_density, df_smk [,j], method = "spearman")$estimate
+    df$smk_rho[j-3] <- cor.test(df_smk$ann_density, df_smk [,j], method = "spearman")$estimate
     df$`smk_p-value`[j-3] <- cor.test(df_smk$ann_density, df_smk [,j], method = "spearman")$p.value
-    df$bk_rho <- cor.test(df_bk$ann_density, df_bk [,j], method = "spearman")$estimate
+    df$bk_rho[j-3] <- cor.test(df_bk$ann_density, df_bk [,j], method = "spearman")$estimate
     df$`bk_p-value`[j-3] <- cor.test(df_bk$ann_density, df_bk [,j], method = "spearman")$p.value
 
     rownames(df) <- paste(colnames(pacl_sum[3]), "on",
                           colnames(pacl_sum [4:ncol(pacl_sum)]))
   }
 view(df)
-
+#view visually with correllagram
+ggcorr(df_wnr, method = c("pairwise", "pearson"), label = TRUE)
+ggcorr(df_bk, method = c("pairwise", "pearson"), label = TRUE)
 
 glimpse(pacl_sum)
 
